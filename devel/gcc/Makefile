@@ -4,17 +4,20 @@
 # This is free software, licensed under the GNU General Public License v2.
 # See /LICENSE for more information.
 #
-#
+# Upgraded from 4.8.3 to 5.3.0
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=gcc
-PKG_VERSION:=4.8.3
-PKG_RELEASE:=1
-PKG_SOURCE_URL:=@GNU/gcc/gcc-$(PKG_VERSION)
+PKG_VERSION:=5.3.0
+PKG_RELEASE:=3
+PKG_SOURCE_URL:=ftp://ftp.fu-berlin.de/unix/languages/gcc/releases/gcc-$(PKG_VERSION) \
+     http://mirrors.rcn.net/pub/sourceware/gcc/releases/gcc-$(PKG_VERSION) \
+    ftp://ftp.gnu.org/gnu/gcc/releases/gcc-$(PKG_VERSION)
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.bz2
-PKG_MD5SUM:=7c60f24fab389f77af203d2516ee110f
+PKG_MD5SUM:=c9616fd448f980259c31de613e575719
+PATCH_DIR:=$(TOPDIR)/toolchain/gcc/patches/$(PKG_VERSION)
 PKG_INSTALL:=1
 PKG_FIXUP:=libtool
 PKG_BUILD_PARALLEL:=1
@@ -46,12 +49,49 @@ define Package/gcc/description
 	build a native toolchain for compiling on target
 endef
 
+GMPSRC=gmp-4.3.2
+
+define Download/gmp
+  URL:=ftp://gcc.gnu.org/pub/gcc/infrastructure/
+  FILE:=$(GMPSRC).tar.bz2
+  MD5SUM:=dd60683d7057917e34630b4a787932e8
+endef
+$(eval $(call Download,gmp))
+
+MPCSRC=mpc-0.8.1
+
+define Download/mpc
+  URL:=ftp://gcc.gnu.org/pub/gcc/infrastructure/
+  FILE:=$(MPCSRC).tar.gz
+  MD5SUM:=5b34aa804d514cc295414a963aedb6bf
+endef
+$(eval $(call Download,mpc))
+
+MPFRSRC=mpfr-2.4.2
+
+define Download/mpfr
+  URL:=ftp://gcc.gnu.org/pub/gcc/infrastructure/
+  FILE:=$(MPFRSRC).tar.bz2
+  MD5SUM:=89e59fe665e2b3ad44a6789f40b059a0
+endef
+$(eval $(call Download,mpfr))
 
 define Build/Prepare
 	$(PKG_UNPACK)
-# 	we have to download additional stuff before patching
-	(cd $(PKG_BUILD_DIR) && ./contrib/download_prerequisites)
+# 	we have to download and unpack additional stuff before patching
+	tar -C $(PKG_BUILD_DIR) -xvjf $(DL_DIR)/$(GMPSRC).tar.bz2
+	ln -sf $(PKG_BUILD_DIR)/$(GMPSRC) $(PKG_BUILD_DIR)/gmp
+	tar -C $(PKG_BUILD_DIR) -xvzf $(DL_DIR)/$(MPCSRC).tar.gz
+	ln -sf $(PKG_BUILD_DIR)/$(MPCSRC) $(PKG_BUILD_DIR)/mpc
+	tar -C $(PKG_BUILD_DIR) -xvjf $(DL_DIR)/$(MPFRSRC).tar.bz2
+	ln -sf $(PKG_BUILD_DIR)/$(MPFRSRC) $(PKG_BUILD_DIR)/mpfr
 	$(Build/Patch)
+	patch -p1 -d "$(PKG_BUILD_DIR)" < ./patches/002-dont-choke-when-building-32bit-on-64bit.patch
+	patch -p1 -d "$(PKG_BUILD_DIR)" < ./patches/003-mpfr-longlong-mips.patch
+#uclibc needs -lm to build libcc1
+ifdef CONFIG_USE_UCLIBC
+	patch -p1 -d "$(PKG_BUILD_DIR)" < ./patches/004-libcc1_uclibc_lm.patch
+endif
 #	poor man's fix for `none-openwrt-linux' not recognized when building with musl
 	cp $(PKG_BUILD_DIR)/config.sub $(PKG_BUILD_DIR)/mpfr/
 	cp $(PKG_BUILD_DIR)/config.sub $(PKG_BUILD_DIR)/gmp/
@@ -72,7 +112,8 @@ define Build/Configure
 			--with-bugurl=$(BUGURL) \
 			--with-pkgversion="$(PKGVERSION)" \
 			--enable-shared \
-			--disable-__cxa_atexit \
+			$(if $(CONFIG_LIBC_USE_GLIBC),--enable,--disable)-__cxa_atexit \
+			--with-default-libstdcxx-abi=gcc4-compatible \
 			--enable-target-optspace \
 			--with-gnu-ld \
 			--disable-nls \
@@ -88,14 +129,17 @@ define Build/Configure
 			--libexecdir=/usr/lib \
 			$(SOFT_FLOAT_CONFIG_OPTION) \
 			$(call qstrip,$(CONFIG_EXTRA_GCC_CONFIG_OPTIONS)) \
-			$(if $(CONFIG_mips64)$(CONFIG_mips64el),--with-arch=mips64 \
-			--with-abi=$(subst ",,$(CONFIG_MIPS64_ABI))) \
 	);
 endef
 
 define Build/Compile
 	export SHELL="$(BASH)"; $(MAKE_VARS) $(MAKE) -C $(PKG_BUILD_DIR) \
 			DESTDIR="$(PKG_INSTALL_DIR)" $(MAKE_ARGS) all install
+endef
+
+define Package/gcc/extra_provides
+    echo 'libm.so.6'; \
+    echo 'libc.so.6';
 endef
 
 define Package/gcc/install
